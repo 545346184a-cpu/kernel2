@@ -33,10 +33,17 @@ jobs:
     - name: Integrate SUSFS
       working-directory: kernel_workspace
       run: |
+        # 严格模式：任何一步出错直接拉闸，不许瞒报
+        set -e
         git clone https://gitlab.com/simonpunk/susfs4ksu.git -b kernel-5.4
+        
+        echo "正在复制 SUSFS 核心头文件..."
         cp -r susfs4ksu/kernel_patches/fs/* fs/
         cp -r susfs4ksu/kernel_patches/include/linux/* include/linux/
-        patch -p1 < susfs4ksu/kernel_patches/50_add_susfs_in_kernel-5.4.patch || true
+        
+        echo "正在应用 SUSFS 内核补丁..."
+        # 【去掉了后半截的 echo 伪装】：如果打补丁不成功，直接在这里报错中断，暴露出哪里冲突
+        patch -p1 < susfs4ksu/kernel_patches/50_add_susfs_in_kernel-5.4.patch
 
     - name: Enable Configs
       working-directory: kernel_workspace
@@ -54,12 +61,21 @@ jobs:
       run: |
         export PATH="$GITHUB_WORKSPACE/clang/bin:$PATH"
         
-        # 【最终杀招】：LLVM_IAS=0 关闭严苛的 Clang 汇编器，回退 GNU 汇编器，解决 5.4 内核语法不兼容问题；同时追加 HOSTCC 防止宿主编译器冲突。
+        # 适配 5.4 老内核汇编语法的纯净工具链参数
         MAKE_ARGS="O=out ARCH=arm64 CC=clang HOSTCC=clang HOSTCXX=clang++ LLVM=1 LLVM_IAS=0 CROSS_COMPILE=aarch64-linux-gnu- CROSS_COMPILE_COMPAT=arm-linux-gnueabi-"
         
         make $MAKE_ARGS vendor/lahaina-qgki_defconfig
         make $MAKE_ARGS olddefconfig
-        make -j$(nproc) $MAKE_ARGS
+        
+        echo "====== 开始内核编译 ======"
+        make -j$(nproc) $MAKE_ARGS 2>&1 | tee build.log || {
+          echo "=================================================="
+          echo "⚠️⚠️⚠️ 编译遇到致命错误！正在为您精确定位错误... ⚠️⚠️⚠️"
+          echo "=================================================="
+          grep -B 1 -A 2 -E "error:|fatal error:|undefined reference" build.log || echo "请查看上方原始日志。"
+          echo "=================================================="
+          exit 1
+        }
 
     - name: Package Kernel
       run: |
