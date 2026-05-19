@@ -1,0 +1,79 @@
+name: Build MIX 4 SukiSU + SUSFS + KPI Kernel
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout Code
+      uses: actions/checkout@v4
+
+    - name: Setup Build Environment
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y build-essential bc curl git python3 flex bison libssl-dev gcc-aarch64-linux-gnu gcc-arm-linux-gnueabi libelf-dev wget zip unzip
+
+    - name: Download Toolchain
+      run: |
+        mkdir -p clang
+        wget -qO clang.tar.gz https://github.com/kdrag0n/proton-clang/archive/master.tar.gz
+        tar -xzf clang.tar.gz -C clang --strip-components=1
+
+    - name: Clone Kernel Source
+      run: |
+        git clone --depth=1 https://github.com/Inkypen79/kernel_xiaomi_odin.git kernel_workspace
+
+    - name: Integrate KernelSU
+      working-directory: kernel_workspace
+      run: |
+        curl -LSs "https://raw.githubusercontent.com/tiann/KernelSU/main/kernel/setup.sh" | bash -
+
+    - name: Integrate SUSFS
+      working-directory: kernel_workspace
+      run: |
+        git clone https://gitlab.com/simonpunk/susfs4ksu.git -b kernel-5.4
+        cp -r susfs4ksu/kernel_patches/fs/* fs/
+        cp -r susfs4ksu/kernel_patches/include/linux/* include/linux/
+        patch -p1 < susfs4ksu/kernel_patches/50_add_susfs_in_kernel-5.4.patch || true
+
+    - name: Enable Configs
+      working-directory: kernel_workspace
+      run: |
+        DEFCONFIG="arch/arm64/configs/vendor/lahaina-qgki_defconfig"
+        echo "CONFIG_KPROBES=y" >> $DEFCONFIG
+        echo "CONFIG_HAVE_KPROBES=y" >> $DEFCONFIG
+        echo "CONFIG_KPROBE_EVENTS=y" >> $DEFCONFIG
+        echo "CONFIG_KSU=y" >> $DEFCONFIG
+        echo "CONFIG_KSU_SUSFS=y" >> $DEFCONFIG
+        echo "CONFIG_KSU_SUSFS_HAS_MAGIC_MOUNT=y" >> $DEFCONFIG
+
+    - name: Build Kernel
+      working-directory: kernel_workspace
+      run: |
+        export PATH="$GITHUB_WORKSPACE/clang/bin:$PATH"
+        export ARCH=arm64
+        export CROSS_COMPILE=aarch64-linux-gnu-
+        export CC=clang
+        make O=out vendor/lahaina-qgki_defconfig
+        make -j$(nproc) O=out CC=clang CROSS_COMPILE=aarch64-linux-gnu-
+
+    - name: Package Kernel
+      run: |
+        git clone https://github.com/osm0sis/AnyKernel3.git -b master AK3
+        if [ -f "kernel_workspace/out/arch/arm64/boot/Image" ]; then
+          cp kernel_workspace/out/arch/arm64/boot/Image* AK3/
+        elif [ -f "kernel_workspace/out/arch/arm64/boot/Image.gz" ]; then
+          cp kernel_workspace/out/arch/arm64/boot/Image.gz* AK3/
+        else
+          find kernel_workspace/out/ -name "Image*" -exec cp {} AK3/ \;
+        fi
+        cd AK3
+        zip -r9 ../SukiSU-Odin-Kernel.zip *
+
+    - name: Upload Finished Zip
+      uses: actions/upload-artifact@v4
+      with:
+        name: Flashable-Kernel
+        path: SukiSU-Odin-Kernel.zip
