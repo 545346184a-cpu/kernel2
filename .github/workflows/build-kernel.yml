@@ -5,7 +5,7 @@ on:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
     steps:
     - name: Checkout Code
       uses: actions/checkout@v4
@@ -53,11 +53,13 @@ jobs:
       working-directory: kernel_workspace
       run: |
         export PATH="$GITHUB_WORKSPACE/clang/bin:$PATH"
-        export ARCH=arm64
-        export CROSS_COMPILE=aarch64-linux-gnu-
-        export CC=clang
-        make O=out vendor/lahaina-qgki_defconfig
-        make -j$(nproc) O=out CC=clang CROSS_COMPILE=aarch64-linux-gnu-
+        
+        # 【最终杀招】：LLVM_IAS=0 关闭严苛的 Clang 汇编器，回退 GNU 汇编器，解决 5.4 内核语法不兼容问题；同时追加 HOSTCC 防止宿主编译器冲突。
+        MAKE_ARGS="O=out ARCH=arm64 CC=clang HOSTCC=clang HOSTCXX=clang++ LLVM=1 LLVM_IAS=0 CROSS_COMPILE=aarch64-linux-gnu- CROSS_COMPILE_COMPAT=arm-linux-gnueabi-"
+        
+        make $MAKE_ARGS vendor/lahaina-qgki_defconfig
+        make $MAKE_ARGS olddefconfig
+        make -j$(nproc) $MAKE_ARGS
 
     - name: Package Kernel
       run: |
